@@ -26,6 +26,7 @@ Alle DATEX-endepunktene krever registrert bruker hos Statens vegvesen (gratis).
 
 - [Kom i gang lokalt](#kom-i-gang-lokalt)
 - [Sette opp GitHub-repoet](#sette-opp-github-repoet)
+- [Innloggingsmodus: delt konto vs. per bruker](#innloggingsmodus-delt-konto-vs-per-bruker)
 - [Deploy til Railway](#deploy-til-railway)
 - [Koble til serveren](#koble-til-serveren)
   - [Claude.ai / Claude-appen (custom connector)](#claudeai--claude-appen-custom-connector)
@@ -49,7 +50,7 @@ pip install -r requirements.txt
 cp .env.example .env
 # rediger .env og fyll inn DATEX_USERNAME / DATEX_PASSWORD
 
-export $(grep -v '^#' .env | xargs)  # eller bruk python-dotenv
+export $(grep -v '^#' .env | xargs)   # eller bruk python-dotenv
 python server.py
 ```
 
@@ -79,15 +80,63 @@ npx @modelcontextprotocol/inspector python server.py
    committer faktiske DATEX-brukernavn/passord. Legg heller inn
    `.env.example` (uten verdier), som allerede ligger i repoet.
 
+## Innloggingsmodus: delt konto vs. per bruker
+
+Serveren støtter to modi, styrt av om `SVV_MCP_PUBLIC_URL` er satt:
+
+| | Delt konto | Multi-bruker (OAuth) |
+|---|---|---|
+| Miljøvariabler | `DATEX_USERNAME` / `DATEX_PASSWORD` | `SVV_MCP_PUBLIC_URL`, `CREDENTIAL_ENCRYPTION_KEY` |
+| Hvem sin DATEX-konto brukes | Din, delt av alle | Hver brukers egen |
+| Onboarding for nye brukere | Ingen | Logger inn med eget DATEX-passord første gang |
+| Krever Railway-volum | Nei | Ja (lagrer krypterte credentials) |
+
+**Multi-bruker-modus** lar deg dele én Railway-URL med andre uten at de trenger
+egen server: når noen legger til connectoren i Claude, sendes de til en
+innloggingsside serveren selv hoster (`/login`), hvor de limer inn sitt eget
+DATEX-brukernavn/passord og ser en lenke for hvordan de skaffer det. Credentials
+lagres kryptert (Fernet) i en SQLite-fil på et Railway-volum, koblet til en
+token MCP-serveren utsteder til Claude.
+
+### Sette opp multi-bruker-modus på Railway
+
+1. Legg til et **volum** på servicen, montert på `/data` (Railway-dashbord:
+   **Settings → Volumes → New Volume**, mount path `/data`).
+2. Generer en krypteringsnøkkel:
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+3. Sett variablene på servicen:
+   - `SVV_MCP_PUBLIC_URL` = din Railway-URL (f.eks. `https://svv-mcp-unofficial-production.up.railway.app`)
+   - `CREDENTIAL_ENCRYPTION_KEY` = nøkkelen fra steg 2
+   - `SVV_MCP_DB_PATH` = `/data/svv_mcp.db`
+   - **Ikke** sett `DATEX_USERNAME`/`DATEX_PASSWORD` i denne modusen
+4. Deploy på nytt. `/mcp` krever nå OAuth; `/login` er den selv-hostede innloggingssiden.
+
+### Teste OAuth-flyten før du deler URL-en videre
+
+Dette er den mest komplekse biten av prosjektet og bør testes én gang manuelt:
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+Pek Inspector mot `https://<ditt-domene>/mcp`, velg autentisering, og gå
+gjennom hele flyten (blir sendt til `/login`, fyller inn testverdier, sendes
+tilbake, verktøykall fungerer). Sjekk Railway-loggene hvis noe feiler —
+autorisasjonsserver-koden i `auth.py` bruker SDK-ets
+`OAuthAuthorizationServerProvider`-grensesnitt, som kan ha avvikende feltnavn
+mellom SDK-versjoner; loggene vil vise nøyaktig hvilken metode/felt som
+eventuelt ikke stemmer.
+
 ## Deploy til Railway
 
 **Alternativ A — via Railway-dashbordet (enklest):**
 
 1. Logg inn på [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**.
 2. Velg `svv-mcp-unofficial`-repoet ditt. Railway finner `Dockerfile` automatisk.
-3. Gå til **Variables** på servicen og legg inn:
-   - `DATEX_USERNAME`
-   - `DATEX_PASSWORD`
+3. Gå til **Variables** på servicen og legg inn variablene for ønsket modus
+   (se tabellen over).
 4. Railway setter `PORT` automatisk — serveren starter da i Streamable
    HTTP-modus og lytter på `0.0.0.0:$PORT`.
 5. Under **Settings → Networking**, trykk **Generate Domain** for å få en
@@ -118,10 +167,12 @@ railway domain
 3. Gi den et navn, f.eks. "Statens vegvesen".
 4. Slå den på i samtalen din under verktøy/connectors.
 
-Fordi `DATEX_USERNAME`/`DATEX_PASSWORD` er satt som miljøvariabler på
-Railway-servicen (ikke som parametere i verktøyene), trenger ikke den som
-kobler seg til å oppgi noen legitimasjon selv — kun eieren av
-Railway-deploymentet.
+**Delt-konto-modus:** ingen ekstra steg — `DATEX_USERNAME`/`DATEX_PASSWORD`
+ligger på serveren, ikke i samtalen.
+
+**Multi-bruker-modus:** Claude sender deg automatisk til `/login`-siden på
+serveren første gang du kobler til. Fyll inn ditt eget DATEX-brukernavn/passord
+der (siden viser også hvordan du skaffer det hvis du ikke har det ennå).
 
 ### Claude Desktop (stdio, lokalt)
 
@@ -141,6 +192,8 @@ Legg til i `claude_desktop_config.json`:
   }
 }
 ```
+
+(Multi-bruker-modus krever HTTP og fungerer ikke over stdio.)
 
 ### Andre MCP-klienter
 
@@ -170,13 +223,16 @@ Alle "hent"-verktøyene tar de samme parameterne:
 ## Feilsøking
 
 - **"401 Uautorisert"** → `DATEX_USERNAME`/`DATEX_PASSWORD` mangler eller er
-  feil på serveren. Sjekk Railway-variablene.
-- **Tomme/uventede resultater ** → kjør `inspiser_datex_publikasjon` mot den
+  feil på serveren (delt-konto-modus), eller brukeren må koble til på nytt for
+  å logge inn (multi-bruker-modus).
+- **Tomme/uventede resultater** → kjør `inspiser_datex_publikasjon` mot den
   aktuelle publikasjonen (se tabellen over `DATEX_ENDPOINTS`-nøkler i
   `server.py`) for å se nøyaktig hvilke XML-tagger NPRA sender akkurat nå,
   og juster `candidate_tags` i det aktuelle verktøyet ved behov.
 - **Timeout** → NPRAs DATEX-node kan være midlertidig nede; prøv igjen om
   litt, eller sjekk driftsmeldinger på vegvesen.no.
+- **OAuth-feil ved tilkobling (multi-bruker-modus)** → se Railway-loggene og
+  seksjonen "Teste OAuth-flyten" over.
 
 ## Lisens
 
