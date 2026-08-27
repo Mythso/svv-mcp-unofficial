@@ -71,6 +71,7 @@ def init_db() -> None:
                 client_secret TEXT,
                 redirect_uris TEXT NOT NULL,
                 client_name TEXT,
+                token_endpoint_auth_method TEXT,
                 created_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS pending_logins (
@@ -116,6 +117,10 @@ def init_db() -> None:
             );
             """
         )
+        try:
+            conn.execute("ALTER TABLE oauth_clients ADD COLUMN token_endpoint_auth_method TEXT")
+        except sqlite3.OperationalError:
+            pass  # kolonnen finnes allerede
 
 
 def _encrypt(value: str) -> bytes:
@@ -311,7 +316,7 @@ class DatexAuthProvider(OAuthAuthorizationServerProvider):
     async def get_client(self, client_id: str) -> Optional[OAuthClientInformationFull]:
         with _db() as conn:
             row = conn.execute(
-                "SELECT client_id, client_secret, redirect_uris, client_name FROM oauth_clients WHERE client_id = ?",
+                "SELECT client_id, client_secret, redirect_uris, client_name, token_endpoint_auth_method FROM oauth_clients WHERE client_id = ?",
                 (client_id,),
             ).fetchone()
         if not row:
@@ -322,19 +327,21 @@ class DatexAuthProvider(OAuthAuthorizationServerProvider):
             client_secret=row[1],
             redirect_uris=_json.loads(row[2]),
             client_name=row[3] or "MCP client",
+            token_endpoint_auth_method=row[4] or ("client_secret_post" if row[1] else "none"),
         )
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         import json as _json
         with _db() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO oauth_clients (client_id, client_secret, redirect_uris, client_name, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO oauth_clients (client_id, client_secret, redirect_uris, client_name, token_endpoint_auth_method, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     client_info.client_id,
                     client_info.client_secret,
                     _json.dumps([str(u) for u in client_info.redirect_uris]),
                     client_info.client_name,
+                    client_info.token_endpoint_auth_method,
                     time.time(),
                 ),
             )
