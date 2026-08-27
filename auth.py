@@ -176,11 +176,14 @@ def _login_page_html(login_id: str, error: Optional[str] = None) -> str:
   h1 {{ font-size: 1.3rem; }}
   .disclaimer {{ background: #fff4e5; border: 1px solid #f0c674; padding: 12px 16px; border-radius: 8px; font-size: 0.9rem; margin-bottom: 24px; }}
   .info {{ background: #eef4ff; border: 1px solid #b8d0ff; padding: 12px 16px; border-radius: 8px; font-size: 0.9rem; margin-bottom: 24px; }}
+  .info ul {{ margin: 8px 0 0; padding-left: 20px; }}
   label {{ display: block; margin-top: 16px; font-weight: 600; font-size: 0.9rem; }}
   input {{ width: 100%; padding: 10px; margin-top: 6px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }}
   button {{ margin-top: 24px; width: 100%; padding: 12px; background: #1a56db; color: white; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; }}
   .error {{ color: #b91c1c; font-weight: 600; }}
   a {{ color: #1a56db; }}
+  .skip {{ margin-top: 20px; text-align: center; font-size: 0.9rem; }}
+  hr {{ margin: 28px 0; border: none; border-top: 1px solid #e5e5e5; }}
 </style>
 </head>
 <body>
@@ -192,6 +195,14 @@ def _login_page_html(login_id: str, error: Optional[str] = None) -> str:
     tilkobling i Claude.
   </div>
   <div class="info">
+    <strong>Med DATEX-innlogging får du tilgang til:</strong>
+    <ul>
+      <li>🌡️ Sanntids værmålinger fra vegstasjoner (vegbanetemp, lufttemp, vind), med varsel om glatt vegbane</li>
+      <li>🌦️ Værprognoser time for time, 24t frem</li>
+      <li>📷 Webkamera langs vegnettet</li>
+      <li>🚗 Sanntids reisetider på hovedstrekninger</li>
+      <li>⚠️ Trafikkmeldinger: ulykker, vegarbeid, stenginger, ras/flom</li>
+    </ul>
     <strong>Har du ikke DATEX-tilgang ennå?</strong><br>
     DATEX-endepunktene hos Statens vegvesen krever en gratis, registrert konto.
     Be om tilgang her: <a href="{REGISTER_URL}" target="_blank" rel="noopener">
@@ -207,6 +218,12 @@ def _login_page_html(login_id: str, error: Optional[str] = None) -> str:
     <input type="password" id="p" name="datex_password" required autocomplete="current-password">
     <button type="submit">Koble til</button>
   </form>
+  <hr>
+  <div class="skip">
+    Vil du ikke skaffe DATEX-tilgang nå?<br>
+    <a href="/login/skip?login_id={login_id}">Fortsett uten konto</a> — du får da kun
+    tilgang til Vegvesenets åpne vegdata (NVDB), ikke vær/webkamera/trafikkmeldinger.
+  </div>
 </body>
 </html>"""
 
@@ -222,12 +239,7 @@ async def login_get(request: Request) -> HTMLResponse:
     return HTMLResponse(_login_page_html(login_id))
 
 
-async def login_post(request: Request):
-    form = await request.form()
-    login_id = str(form.get("login_id", ""))
-    datex_username = str(form.get("datex_username", "")).strip()
-    datex_password = str(form.get("datex_password", "")).strip()
-
+def _complete_login(login_id, username, password):
     with _db() as conn:
         row = conn.execute(
             "SELECT client_id, redirect_uri, code_challenge, code_challenge_method, scopes, state, expires_at "
@@ -237,13 +249,15 @@ async def login_post(request: Request):
 
     if not row or row[6] < time.time():
         return HTMLResponse("Innloggingsøkten er utløpt. Gå tilbake til Claude og koble til på nytt.", status_code=400)
-    if not datex_username or not datex_password:
-        return HTMLResponse(_login_page_html(login_id, error="Fyll ut både brukernavn og passord."), status_code=400)
 
     client_id, redirect_uri, code_challenge, code_challenge_method, scopes, state, _ = row
 
     user_id = str(uuid.uuid4())
-    store_datex_credentials(user_id, datex_username, datex_password)
+    if username and password:
+        store_datex_credentials(user_id, username, password)
+    # Uten username/password: "anonym" bruker uten lagrede DATEX-credentials.
+    # DATEX-avhengige verktøy ber da brukeren koble til på nytt for å logge inn,
+    # mens verktøy mot åpne kilder (f.eks. NVDB) fungerer som normalt.
 
     code = secrets.token_urlsafe(32)
     with _db() as conn:
@@ -261,9 +275,27 @@ async def login_post(request: Request):
     return RedirectResponse(url=f"{redirect_uri}?{urlencode(params)}", status_code=302)
 
 
+async def login_post(request: Request):
+    form = await request.form()
+    login_id = str(form.get("login_id", ""))
+    datex_username = str(form.get("datex_username", "")).strip()
+    datex_password = str(form.get("datex_password", "")).strip()
+
+    if not datex_username or not datex_password:
+        return HTMLResponse(_login_page_html(login_id, error="Fyll ut både brukernavn og passord, eller velg «Fortsett uten konto» under."), status_code=400)
+
+    return _complete_login(login_id, datex_username, datex_password)
+
+
+async def login_skip(request: Request):
+    login_id = request.query_params.get("login_id", "")
+    return _complete_login(login_id, None, None)
+
+
 LOGIN_ROUTES = [
     Route("/login", login_get, methods=["GET"]),
     Route("/login", login_post, methods=["POST"]),
+    Route("/login/skip", login_skip, methods=["GET"]),
 ]
 
 
