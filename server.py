@@ -55,6 +55,11 @@ DATEX_ENDPOINTS: Dict[str, str] = {
 
 REGISTER_URL = "https://www.vegvesen.no/en/fag/technology/open-data/a-selection-of-open-data/what-is-datex/get-access/"
 
+# NVDB (Nasjonal vegdatabank) er, i motsetning til DATEX, i hovedsak åpent
+# tilgjengelig UTEN pålogging. Brukes for "fortsett uten konto"-sporet.
+NVDB_BASE_URL = "https://nvdbapiles.atlas.vegvesen.no"
+NVDB_CLIENT_HEADER = "svv-mcp-unofficial"
+
 PUBLIC_URL = os.environ.get("SVV_MCP_PUBLIC_URL", "").rstrip("/")
 MULTI_USER_AUTH = bool(PUBLIC_URL)  # Slått på når serveren er deployet med offentlig URL
 
@@ -529,6 +534,105 @@ async def hent_trafikkmeldinger(params: DatexQueryInput) -> str:
         "Trafikkmeldinger",
         params,
     )
+
+
+# --------------------------------------------------------------------------
+# Åpen vegdata (NVDB) — fungerer UTEN DATEX-innlogging
+# --------------------------------------------------------------------------
+
+def _flatten_json(obj, prefix=""):
+    """Flater et NVDB JSON-objekt til en dict, i samme ånd som XML-flateren over."""
+    flat = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, (dict, list)):
+                flat.update(_flatten_json(v, key))
+            elif v is not None:
+                flat[key] = v
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj[:20]):
+            flat.update(_flatten_json(item, f"{prefix}[{i}]"))
+    return flat
+
+
+class NvdbQueryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    vegobjekttype: int = Field(
+        ...,
+        description=(
+            "NVDB-vegobjekttype-ID å hente. Vanlige eksempler: 105=Fartsgrense, "
+            "95=Fartshump, 538=Vegbredde, 60=Rasteplass, 39=Rekkverk, 199=Trafikkmengde (ÅDT). "
+            "Full liste over vegobjekttyper finnes i NVDBs datakatalog."
+        ),
+    )
+    fylke: Optional[int] = Field(default=None, description="Valgfritt fylkesnummer å filtrere på (f.eks. 3 for Oslo).")
+    kommune: Optional[int] = Field(default=None, description="Valgfritt kommunenummer å filtrere på.")
+    maks_antall: int = Field(default=10, description="Maks antall objekter som returneres.", ge=1, le=50)
+
+
+@mcp.tool(
+    name="hent_apen_vegdata",
+    annotations={"title": "Hent åpen vegdata fra NVDB (uten pålogging)", **READ_ONLY_OPEN_WORLD},
+)
+async def hent_apen_vegdata(params: NvdbQueryInput) -> str:
+    """Henter vegobjekter (f.eks. fartsgrenser, rasteplasser, trafikkmengder) fra
+    Statens vegvesens Nasjonale vegdatabank (NVDB). I motsetning til de andre
+    verktøyene i denne serveren krever NVDB IKKE registrert bruker/passord —
+    dette verktøyet fungerer også for brukere som koblet til uten DATEX-konto.
+
+    Args:
+        params (NvdbQueryInput): vegobjekttype (påkrevd), fylke, kommune, maks_antall.
+
+    Returns:
+        str: Markdown-liste med vegobjekter og deres egenskaper.
+    """
+    url = f"{NVDB_BASE_URL}/vegobjekter/{params.vegobjekttype}"
+    query = {"antall": params.maks_antall}
+    if params.fylke:
+        query["fylke"] = params.fylke
+    if params.kommune:
+        query["kommune"] = params.kommune
+
+    headers = {"X-Client": NVDB_CLIENT_HEADER, "Accept": "application/vnd.vegvesen.nvdb-v4+json"}
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        try:
+            resp = await client.get(url, params=query, headers=headers)
+        except httpx.TimeoutException:
+            return "Feil: Tidsavbrudd mot NVDB API. Prøv igjen om litt."
+        except httpx.RequestError as e:
+            return f"Feil: Nettverksfeil mot NVDB API: {e}"
+
+    if resp.status_code == 404:
+        return f"Fant ingen vegobjekttype med ID {params.vegobjekttype}. Sjekk ID-en mot NVDBs datakatalog."
+    if resp.status_code != 200:
+        return f"Feil: NVDB API svarte med HTTP {resp.status_code}: {resp.text[:300]}"
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return "Feil: Kunne ikke tolke JSON-svaret fra NVDB."
+
+    objekter = data.get("objekter", [])
+    metadata = data.get("metadata", {})
+    if not objekter:
+        return f"Fant ingen vegobjekter av type {params.vegobjekttype} med disse filtrene."
+
+    lines = [
+        f"**Åpen vegdata — vegobjekttype {params.vegobjekttype}** "
+        f"(viser {len(objekter)} av totalt {metadata.get('antall', len(objekter))})\n"
+    ]
+    for i, obj in enumerate(objekter, 1):
+        flat = _flatten_json(obj)
+        obj_id = flat.get("id", "?")
+        lines.append(f"### {i}. Objekt-ID {obj_id}")
+        for k, v in sorted(flat.items()):
+            if k == "id":
+                continue
+            lines.append(f"- **{k}**: {v}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------
