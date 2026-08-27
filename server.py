@@ -589,7 +589,7 @@ async def hent_apen_vegdata(params: NvdbQueryInput) -> str:
         str: Markdown-liste med vegobjekter og deres egenskaper.
     """
     url = f"{NVDB_BASE_URL}/vegobjekter/{params.vegobjekttype}"
-    query = {"antall": params.maks_antall}
+    query = {"antall": params.maks_antall, "inkluder": "alle"}
     if params.fylke:
         query["fylke"] = params.fylke
     if params.kommune:
