@@ -707,6 +707,6 @@ if __name__ == "__main__":
             app.router.routes.extend(datex_auth.LOGIN_ROUTES)
             uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
         else:
-            mcp.run(transport="streamable_http")
+            mcp.run(transport="streamable-http")
     else:
         mcp.run()
