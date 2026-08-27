@@ -172,7 +172,10 @@ ligger på serveren, ikke i samtalen.
 
 **Multi-bruker-modus:** Claude sender deg automatisk til `/login`-siden på
 serveren første gang du kobler til. Fyll inn ditt eget DATEX-brukernavn/passord
-der (siden viser også hvordan du skaffer det hvis du ikke har det ennå).
+der (siden viser også hvordan du skaffer det hvis du ikke har det ennå, og
+hvilke verktøy DATEX-tilgang faktisk gir deg). Vil du ikke skaffe DATEX-tilgang,
+kan du velge «Fortsett uten konto» — da får du kun `hent_apen_vegdata`
+(NVDB, ingen pålogging nødvendig).
 
 ### Claude Desktop (stdio, lokalt)
 
@@ -213,6 +216,7 @@ Enhver klient som støtter Streamable HTTP kan peke direkte på
 | `hent_reisetid_strekninger` | Geometri/navn på strekninger det måles reisetid på |
 | `hent_trafikkmeldinger` | Ulykker, vegarbeid, stenginger, ras/flom m.m. |
 | `inspiser_datex_publikasjon` | Feilsøking: viser rå tag-struktur fra et gitt DATEX-endepunkt |
+| `hent_apen_vegdata` | Åpen vegdata fra NVDB (fartsgrenser, rasteplasser, ÅDT m.m.) — krever **ikke** DATEX-innlogging |
 
 Alle "hent"-verktøyene tar de samme parameterne:
 
