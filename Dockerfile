@@ -5,7 +5,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py .
+COPY server.py auth.py .
+
+# Persistent volum for den krypterte SQLite-databasen med DATEX-credentials
+# (monteres av Railway på /data — se README).
+RUN mkdir -p /data
 
 # Railway setter PORT automatisk og injiserer den til containeren.
 # server.py leser os.environ["PORT"] og starter Streamable HTTP-transport
