@@ -218,6 +218,12 @@ def _login_page_html(login_id: str, error: Optional[str] = None) -> str:
     Be om tilgang her: <a href="{REGISTER_URL}" target="_blank" rel="noopener">
     vegvesen.no – Be om tilgang til DATEX</a>. Du får tilsendt brukernavn og
     passord som du limer inn under.
+    <br><br>
+    <strong>OBS:</strong> I søknadsskjemaet blir du bedt om en "Fixed IP address
+    or DNS name". Siden denne tjenesten kjører på Railway uten fast IP, bruk
+    DNS-navnet:
+    <br>
+    <code style="background:#fff;border:1px solid #b8d0ff;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px;">svv-mcp-unofficial-production.up.railway.app</code>
   </div>
   {error_html}
   <form method="post" action="/login">
