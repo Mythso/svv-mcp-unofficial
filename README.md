@@ -7,6 +7,10 @@
 > DATEX II-endepunkter, og bruk er underlagt deres vilkår (se
 > [Lisens](#lisens)).
 
+✅ **Status:** Kjører live på Railway med multi-bruker OAuth-innlogging,
+verifisert fungerende ende-til-ende (discovery → registrering → autorisasjon
+→ innlogging → token → autentiserte verktøykall) mot en ekte Claude.ai-tilkobling.
+
 MCP-server (Model Context Protocol) som gir en LLM tilgang til Statens vegvesens
 åpne sanntidsdata via [DATEX II](https://www.vegvesen.no/en/fag/technology/open-data/a-selection-of-open-data/what-is-datex/):
 
@@ -15,6 +19,7 @@ MCP-server (Model Context Protocol) som gir en LLM tilgang til Statens vegvesens
 - 📷 **Webkamera** langs vegnettet
 - 🚗 **Reisetider** i sanntid på hovedstrekninger
 - ⚠️ **Trafikkmeldinger** (ulykker, vegarbeid, stenginger, ras/flom m.m.)
+- 🌍 **Åpen vegdata fra NVDB** (fartsgrenser, rasteplasser, ÅDT m.m.) — krever ikke DATEX-innlogging
 - 🔧 Et innebygd feilsøkingsverktøy som viser rå XML-struktur, siden NPRAs skjema kan endre seg
 
 Alle DATEX-endepunktene krever registrert bruker hos Statens vegvesen (gratis).
@@ -34,6 +39,7 @@ Alle DATEX-endepunktene krever registrert bruker hos Statens vegvesen (gratis).
   - [Andre MCP-klienter](#andre-mcp-klienter)
 - [Tilgjengelige verktøy](#tilgjengelige-verktøy)
 - [Feilsøking](#feilsøking)
+- [Kjente løste bugs (for de som forker prosjektet)](#kjente-løste-bugs-for-de-som-forker-prosjektet)
 
 ---
 
@@ -98,6 +104,9 @@ DATEX-brukernavn/passord og ser en lenke for hvordan de skaffer det. Credentials
 lagres kryptert (Fernet) i en SQLite-fil på et Railway-volum, koblet til en
 token MCP-serveren utsteder til Claude.
 
+Siden vår kjører for tiden i multi-bruker-modus på
+`https://svv-mcp-unofficial-production.up.railway.app`.
+
 ### Sette opp multi-bruker-modus på Railway
 
 1. Legg til et **volum** på servicen, montert på `/data` (Railway-dashbord:
@@ -111,37 +120,54 @@ token MCP-serveren utsteder til Claude.
    - `CREDENTIAL_ENCRYPTION_KEY` = nøkkelen fra steg 2
    - `SVV_MCP_DB_PATH` = `/data/svv_mcp.db`
    - **Ikke** sett `DATEX_USERNAME`/`DATEX_PASSWORD` i denne modusen
-4. Deploy på nytt. `/mcp` krever nå OAuth; `/login` er den selv-hostede innloggingssiden.
+4. Sett `dockerfilePath` til `Dockerfile` i service-innstillingene (Railway
+   autodetekterer noen ganger Railpack i stedet — sjekk **Settings → Build**).
+5. Deploy på nytt. `/mcp` krever nå OAuth; `/login` er den selv-hostede innloggingssiden.
+
+### DNS-navn for DATEX-registrering
+
+Når du (eller en bruker) registrerer seg for DATEX-tilgang hos Statens vegvesen,
+spør skjemaet om en **"Fixed IP address or DNS name"**. Railway gir ikke en fast
+utgående IP som standard (Static Outbound IP krever Pro-plan og er i tillegg en
+delt IP mellom flere Railway-kunder). Bruk derfor **DNS-navnet** til Railway-
+servicen din, f.eks.:
+
+```
+svv-mcp-unofficial-production.up.railway.app
+```
+
+Dette står også forklart direkte på `/login`-siden når man ikke har DATEX-tilgang ennå.
 
 ### Teste OAuth-flyten før du deler URL-en videre
-
-Dette er den mest komplekse biten av prosjektet og bør testes én gang manuelt:
 
 ```bash
 npx @modelcontextprotocol/inspector
 ```
 
 Pek Inspector mot `https://<ditt-domene>/mcp`, velg autentisering, og gå
-gjennom hele flyten (blir sendt til `/login`, fyller inn testverdier, sendes
-tilbake, verktøykall fungerer). Sjekk Railway-loggene hvis noe feiler —
-autorisasjonsserver-koden i `auth.py` bruker SDK-ets
-`OAuthAuthorizationServerProvider`-grensesnitt, som kan ha avvikende feltnavn
-mellom SDK-versjoner; loggene vil vise nøyaktig hvilken metode/felt som
-eventuelt ikke stemmer.
+gjennom hele flyten. Hele kjeden (discovery → DCR → `/authorize` → `/login` →
+token-utveksling → autentiserte verktøykall) er verifisert å fungere både med
+`curl`-simulering og en reell Claude.ai-tilkobling. Sjekk Railway-loggene
+(`types: ["http"]`, snevert tidsvindu) hvis noe feiler — se
+[Kjente løste bugs](#kjente-løste-bugs-for-de-som-forker-prosjektet) for de
+vanligste fallgruvene i `auth.py`.
 
 ## Deploy til Railway
 
 **Alternativ A — via Railway-dashbordet (enklest):**
 
 1. Logg inn på [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**.
-2. Velg `svv-mcp-unofficial`-repoet ditt. Railway finner `Dockerfile` automatisk.
-3. Gå til **Variables** på servicen og legg inn variablene for ønsket modus
+2. Velg `svv-mcp-unofficial`-repoet ditt.
+3. Under **Settings → Build**, sett **Builder** til **Dockerfile** eksplisitt
+   (Railway velger noen ganger Railpack automatisk, som ikke setter opp
+   `/data`-mappen riktig for SQLite-volumet).
+4. Gå til **Variables** på servicen og legg inn variablene for ønsket modus
    (se tabellen over).
-4. Railway setter `PORT` automatisk — serveren starter da i Streamable
+5. Railway setter `PORT` automatisk — serveren starter da i Streamable
    HTTP-modus og lytter på `0.0.0.0:$PORT`.
-5. Under **Settings → Networking**, trykk **Generate Domain** for å få en
+6. Under **Settings → Networking**, trykk **Generate Domain** for å få en
    offentlig URL (f.eks. `https://svv-mcp-unofficial-production.up.railway.app`).
-6. MCP-endepunktet blir da: `https://<ditt-domene>/mcp`
+7. MCP-endepunktet blir da: `https://<ditt-domene>/mcp`
 
 **Alternativ B — via Railway CLI:**
 
@@ -155,7 +181,9 @@ railway domain
 ```
 
 > Serveren bruker Streamable HTTP (ikke SSE), som er anbefalt transport for
-> eksterne MCP-servere i dagens spesifikasjon.
+> eksterne MCP-servere i dagens spesifikasjon. Merk: den installerte
+> SDK-versjonen forventer transport-strengen `"streamable-http"` med
+> bindestrek, ikke understrek — dette er allerede rettet i `server.py`.
 
 ## Koble til serveren
 
@@ -172,10 +200,10 @@ ligger på serveren, ikke i samtalen.
 
 **Multi-bruker-modus:** Claude sender deg automatisk til `/login`-siden på
 serveren første gang du kobler til. Fyll inn ditt eget DATEX-brukernavn/passord
-der (siden viser også hvordan du skaffer det hvis du ikke har det ennå, og
-hvilke verktøy DATEX-tilgang faktisk gir deg). Vil du ikke skaffe DATEX-tilgang,
-kan du velge «Fortsett uten konto» — da får du kun `hent_apen_vegdata`
-(NVDB, ingen pålogging nødvendig).
+der (siden viser også hvordan du skaffer det hvis du ikke har det ennå, hvilket
+DNS-navn du trenger i søknadsskjemaet, og hvilke verktøy DATEX-tilgang faktisk
+gir deg). Vil du ikke skaffe DATEX-tilgang, kan du velge «Fortsett uten konto»
+— da får du kun `hent_apen_vegdata` (NVDB, ingen pålogging nødvendig).
 
 ### Claude Desktop (stdio, lokalt)
 
@@ -215,14 +243,17 @@ Enhver klient som støtter Streamable HTTP kan peke direkte på
 | `hent_reisetider` | Sanntids reisetider på hovedstrekninger |
 | `hent_reisetid_strekninger` | Geometri/navn på strekninger det måles reisetid på |
 | `hent_trafikkmeldinger` | Ulykker, vegarbeid, stenginger, ras/flom m.m. |
-| `inspiser_datex_publikasjon` | Feilsøking: viser rå tag-struktur fra et gitt DATEX-endepunkt |
 | `hent_apen_vegdata` | Åpen vegdata fra NVDB (fartsgrenser, rasteplasser, ÅDT m.m.) — krever **ikke** DATEX-innlogging |
+| `inspiser_datex_publikasjon` | Feilsøking: viser rå tag-struktur fra et gitt DATEX-endepunkt |
 
 Alle "hent"-verktøyene tar de samme parameterne:
 
 - `sokeord` (valgfritt) — filtrerer på alle feltverdier, f.eks. `"E18"`, `"Hemsedal"`
 - `maks_antall` (standard 10) — maks antall poster i svaret
 - `format` — `"markdown"` (lesbart) eller `"json"` (strukturert)
+
+`hent_apen_vegdata` tar i tillegg `vegobjekttype` (påkrevd, f.eks. 105 for
+fartsgrense), samt valgfri `fylke`/`kommune`.
 
 ## Feilsøking
 
@@ -235,8 +266,33 @@ Alle "hent"-verktøyene tar de samme parameterne:
   og juster `candidate_tags` i det aktuelle verktøyet ved behov.
 - **Timeout** → NPRAs DATEX-node kan være midlertidig nede; prøv igjen om
   litt, eller sjekk driftsmeldinger på vegvesen.no.
-- **OAuth-feil ved tilkobling (multi-bruker-modus)** → se Railway-loggene og
-  seksjonen "Teste OAuth-flyten" over.
+- **"Authorization with [server] failed" i Claude.ai, ingen feil i Railway-loggene**
+  → sjekk om `/authorize` redirecter rett tilbake til klientens `redirect_uri`
+  med `error=invalid_scope` i stedet for til `/login`. Se
+  [Kjente løste bugs](#kjente-løste-bugs-for-de-som-forker-prosjektet) under —
+  dette var årsaken til akkurat denne feilen for oss, og er allerede rettet i
+  koden, men er verdt å vite om ved videre endringer i `auth.py`.
+
+## Kjente løste bugs (for de som forker prosjektet)
+
+Disse ble funnet under uttesting mot en ekte Claude.ai-tilkobling og er
+allerede rettet i koden, men er dokumentert her siden de er lette å
+gjeninnføre ved videre arbeid på `auth.py`/`server.py`:
+
+1. **`invalid_scope`-feil rett til klientens redirect_uri, aldri innom `/login`**
+   `DatexAuthProvider.get_client()`/`register_client()` lagret ikke `scope`
+   for registrerte OAuth-klienter. Når Claude ba om `scope=datex` i
+   `/authorize`, validerte SDK-en dette mot klientens (tomme) registrerte
+   scope og avviste umiddelbart — uten å noensinne kalle vår egen
+   `authorize()`-metode. Løsning: lagre og returner `scope` i
+   `oauth_clients`-tabellen.
+2. **`token_endpoint_auth_method` manglet på klienter** → `/token` svarte
+   `"Unsupported auth method: None"` for alle klienter. Løsning: lagre og
+   returner feltet fra DCR-registreringen.
+3. **Transport-streng** → installert SDK-versjon krever `"streamable-http"`
+   (bindestrek), ikke `"streamable_http"` (understrek), i `mcp.run(transport=...)`.
+4. **NVDB-kall manglet `inkluder=alle`** → `hent_apen_vegdata` returnerte kun
+   href-referanser, ikke faktiske egenskaper (fartsgrenseverdi osv.).
 
 ## Lisens
 
